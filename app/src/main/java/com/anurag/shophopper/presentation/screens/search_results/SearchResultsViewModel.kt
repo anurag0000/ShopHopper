@@ -1,0 +1,94 @@
+package com.anurag.shophopper.presentation.screens.search_results
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.anurag.shophopper.core.util.onResponse
+import com.anurag.shophopper.domain.model.CommonProduct
+import com.anurag.shophopper.domain.usecase.SearchUseCase
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+@HiltViewModel
+class SearchResultsViewModel @Inject constructor(
+    private val searchUseCase: SearchUseCase
+) : ViewModel() {
+
+    private val _uiState = MutableStateFlow(SearchResultsUIState())
+    val uiState = _uiState.asStateFlow()
+    private var searchJob: Job? = null
+
+    fun onSearchQueryChanged(newValue: String) {
+        _uiState.update { it.copy(searchQuery = newValue) }
+        if (newValue.isEmpty()) {
+            searchJob?.cancel()
+            _uiState.update { it.copy(resultsList = emptyList()) }
+        } else {
+            searchForProduct()
+        }
+    }
+
+    fun sortResults(sortOption: SortOption) {
+        val oldList = uiState.value.resultsList.map { it.copy() }
+        val newList: List<CommonProduct> = when (sortOption) {
+            SortOption.AlphaAsc -> oldList.sortedBy { it.name }
+            SortOption.AlphaDes -> oldList.sortedBy { it.name }.reversed()
+            SortOption.PriceAcs -> oldList.sortedBy { it.price }
+            SortOption.PriceDes -> oldList.sortedBy { it.price }.reversed()
+            SortOption.RatingAcs -> oldList.sortedBy { it.rating }
+            SortOption.RatingDes -> oldList.sortedBy { it.rating }.reversed()
+        }
+        _uiState.update { it.copy(resultsList = newList) }
+    }
+
+    fun filterResults(
+        minPrice: Int,
+        maxPrice: Int,
+        minRatting: Int,
+        maxRatting: Int
+    ) {
+        val oldList = uiState.value.originalResults.map { it.copy() }
+        val newList: List<CommonProduct> = oldList.filter { product ->
+            (product.discount ?: product.price) >= minPrice &&
+                    (product.discount ?: product.price) <= maxPrice &&
+                    product.rating >= minRatting &&
+                    product.rating <= maxRatting
+        }
+        _uiState.update { it.copy(resultsList = newList) }
+    }
+
+    private fun searchForProduct() {
+        _uiState.update { it.copy(isLoading = true) }
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(500)
+            searchUseCase(query = uiState.value.searchQuery).onResponse(
+                onLoading = {
+                    _uiState.update { it.copy(isLoading = true) }
+                },
+                onSuccess = { results ->
+                    _uiState.update {
+                        it.copy(
+                            resultsList = results!!,
+                            originalResults = results,
+                            isLoading = false
+                        )
+                    }
+                },
+                onFailure = {
+                    _uiState.update { it.copy(isLoading = false) }
+                }
+            )
+        }
+    }
+
+    fun setInitialStartingQuery(value: String) {
+        onSearchQueryChanged(newValue = value)
+    }
+}
